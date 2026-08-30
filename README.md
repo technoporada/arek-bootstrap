@@ -43,6 +43,13 @@ cd moja_nauka
 3. **Zero magicznych kroków** — jeden skrypt, jeden wynik.
 4. **Bezpieczeństwo** — `.env` nigdy w git, `npm audit` domyślnie.
 
+## Autor
+
+**Arek** — pseudonim **h5n1** (z czasów IRC, ~2001). Samouk: od mIRC
+i skryptów-pomysłów po pełne automatyzacje pisane z pomocą AI. Ta narzędziownia
+wyrosła z frustracji setkami projektów z GitHub, które "nie umiały się ustawić".
+Niech kolejni (i przyszły Ty) nie muszą tego przechodzić.
+
 ## Licencja
 
 MIT — rób co chcesz, może ktoś (albo przyszły Ty) uniknie problemów,
