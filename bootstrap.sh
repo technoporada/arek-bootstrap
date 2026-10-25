@@ -24,6 +24,7 @@ ALL=0
 LIST=0
 DO_AUDIT=1
 REFRESH_THREATS=0
+AUTO_INSTALL=0
 NO_SCRIPTS=${AREK_NO_SCRIPTS:-0}
 DOCKER_UP=0
 QUIET=0
@@ -121,6 +122,8 @@ Opcje:
   --no-scripts           nie uruchamiaj skryptów instalacyjnych pakietów
                          (npm/pnpm/yarn/bun --ignore-scripts, composer --no-scripts)
   --refresh-threats      odśwież lokalną bazę zagrożeń (osv-scanner) i przeskanuj projekt
+  --install              zainstaluj brakujące narzędzia automatycznie (user-level;
+                         systemowe przez sudo, jeśli dostępne)
   --docker-up            po walidacji uruchom docker compose up -d --build
   --quiet, -q            tylko ostrzeżenia i błędy
   --verbose, -v          dodatkowe informacje diagnostyczne
@@ -183,6 +186,9 @@ parse_args() {
         ;;
       --refresh-threats)
         REFRESH_THREATS=1
+        ;;
+      --install)
+        AUTO_INSTALL=1
         ;;
       --docker-up)
         DOCKER_UP=1
@@ -997,6 +1003,190 @@ refresh_threats() {
 }
 
 # ---------------------------------------------------------------------------
+# Instalacja brakujących narzędzi (inteligentna, user-level gdzie się da)
+# ---------------------------------------------------------------------------
+ensure_sudo() {
+  if sudo -n true 2>/dev/null; then
+    return 0
+  fi
+  if [ -t 0 ]; then
+    if sudo -v; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+install_shellcheck_user() {
+  have shellcheck && return 0
+  log "instaluję shellcheck (user-level, przypięty 0.10.0)"
+  mkdir -p "$HOME/.local/bin"
+  curl -fsSL -o /tmp/sc.tar.xz     "https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz" || return 1
+  printf '%s  %s\n' "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87" "/tmp/sc.tar.xz" | sha256sum -c - >/dev/null || return 1
+  tar -xJf /tmp/sc.tar.xz -C /tmp || return 1
+  cp /tmp/shellcheck-v0.10.0/shellcheck "$HOME/.local/bin/shellcheck"
+  chmod +x "$HOME/.local/bin/shellcheck"
+}
+
+install_uv_user() {
+  have uv && return 0
+  log "instaluję uv (user-level)"
+  curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || return 1
+  # załaduj env, jeśli dostępny
+  # shellcheck source=/dev/null
+  [ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"
+}
+
+install_nvm_node_user() {
+  have node && return 0
+  log "instaluję nvm + Node LTS (user-level)"
+  if [ ! -d "$HOME/.nvm" ]; then
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash >/dev/null 2>&1 || return 1
+  fi
+  export NVM_DIR="$HOME/.nvm"
+  # shellcheck source=/dev/null
+  [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+  nvm install --lts >/dev/null 2>&1 || return 1
+}
+
+install_rust_user() {
+  have cargo && return 0
+  log "instaluję Rust przez rustup (user-level)"
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y >/dev/null 2>&1 || return 1
+  # shellcheck source=/dev/null
+  [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+}
+
+install_system_pkgs() {
+  # $@ = lista pakietów apt
+  [ "$#" -eq 0 ] && return 0
+  if ensure_sudo; then
+    log "instaluję (apt): $*"
+    sudo apt-get update -qq >/dev/null 2>&1
+    sudo apt-get install -y -qq "$@" >/dev/null 2>&1
+  else
+    warn "brak sudo - zainstaluj ręcznie: sudo apt install $*"
+    return 1
+  fi
+}
+
+detect_needed_tools() {
+  # ustawia zmienne globalne: need_*
+  need_shellcheck=0
+  need_uv=0
+  need_node=0
+  need_python_venv=0
+  need_rust=0
+  need_go=0
+  need_php=0
+  need_ruby=0
+  need_docker=0
+
+  # bash stack -> shellcheck
+  if printf '%s\n' "$SELECTED" | grep -q '|.*bash'; then
+    need_shellcheck=1
+  fi
+  # python
+  if printf '%s\n' "$SELECTED" | grep -q '|.*python'; then
+    need_python_venv=1
+    if ! have uv; then need_uv=1; fi
+  fi
+  # node
+  if printf '%s\n' "$SELECTED" | grep -q '|.*node'; then
+    need_node=1
+  fi
+  # rust
+  if printf '%s\n' "$SELECTED" | grep -q '|.*rust'; then
+    need_rust=1
+  fi
+  # go
+  if printf '%s\n' "$SELECTED" | grep -q '|.*go'; then
+    need_go=1
+  fi
+  # php
+  if printf '%s\n' "$SELECTED" | grep -q '|.*php'; then
+    need_php=1
+  fi
+  # ruby
+  if printf '%s\n' "$SELECTED" | grep -q '|.*ruby'; then
+    need_ruby=1
+  fi
+  # docker
+  if printf '%s\n' "$SELECTED" | grep -q '|.*docker'; then
+    need_docker=1
+  fi
+
+  # zawsze przydatny: shellcheck
+  need_shellcheck=1
+}
+
+auto_install_missing() {
+  local installed=""
+
+  # user-level (bez sudo)
+  if [ "$need_shellcheck" = 1 ] && ! have shellcheck; then
+    if install_shellcheck_user; then installed="$installed shellcheck"; fi
+  fi
+  if [ "$need_uv" = 1 ] && ! have uv; then
+    if install_uv_user; then installed="$installed uv"; fi
+  fi
+  if [ "$need_node" = 1 ] && ! have node; then
+    if install_nvm_node_user; then installed="$installed node"; fi
+  fi
+  if [ "$need_rust" = 1 ] && ! have cargo; then
+    if install_rust_user; then installed="$installed rust"; fi
+  fi
+
+  # system-level (sudo) - tylko jeśli --install
+  if [ "$AUTO_INSTALL" = 1 ]; then
+    if [ "$need_python_venv" = 1 ] && ! python3 -c 'import venv' 2>/dev/null; then
+      install_system_pkgs python3-venv python3-pip && installed="$installed python3-venv"
+    fi
+    if [ "$need_go" = 1 ] && ! have go; then
+      install_system_pkgs golang-go && installed="$installed go"
+    fi
+    if [ "$need_php" = 1 ] && ! have php; then
+      install_system_pkgs php php-cli php-mbstring php-xml php-curl && installed="$installed php"
+    fi
+    if [ "$need_ruby" = 1 ] && ! have ruby; then
+      install_system_pkgs ruby-full && installed="$installed ruby"
+    fi
+    if [ "$need_docker" = 1 ] && ! have docker; then
+      install_system_pkgs docker.io docker-compose-v2 && installed="$installed docker"
+    fi
+  fi
+
+  # raport brakujących (systemowych) gdy nie --install
+  if [ "$AUTO_INSTALL" = 0 ]; then
+    local sys_missing=""
+    [ "$need_python_venv" = 1 ] && ! python3 -c 'import venv' 2>/dev/null && sys_missing="$sys_missing python3-venv"
+    [ "$need_go" = 1 ] && ! have go && sys_missing="$sys_missing go"
+    [ "$need_php" = 1 ] && ! have php && sys_missing="$sys_missing php"
+    [ "$need_ruby" = 1 ] && ! have ruby && sys_missing="$sys_missing ruby"
+    [ "$need_docker" = 1 ] && ! have docker && sys_missing="$sys_missing docker"
+    if [ -n "$sys_missing" ]; then
+      warn "Brak narzędzi systemowych:$sys_missing"
+      warn "Zainstaluj: sudo apt install$sys_missing   (albo użyj --install)"
+    fi
+  fi
+
+  if [ -n "$installed" ]; then
+    ok "Zainstalowano:$installed"
+    # załaduj nowe ścieżki w bieżącej sesji
+    # shellcheck source=/dev/null
+    [ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"
+    # shellcheck source=/dev/null
+    [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+    export NVM_DIR="$HOME/.nvm"
+    # shellcheck source=/dev/null
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Python
 # ---------------------------------------------------------------------------
 pick_python() {
@@ -1545,6 +1735,27 @@ main() {
   fi
 
   select_projects
+
+  if [ -n "$SELECTED" ]; then
+    detect_needed_tools
+    if [ "$AUTO_INSTALL" = 1 ]; then
+      auto_install_missing
+    else
+      missing_hint=""
+      [ "$need_shellcheck" = 1 ] && ! have shellcheck && missing_hint="$missing_hint shellcheck"
+      [ "$need_uv" = 1 ] && ! have uv && missing_hint="$missing_hint uv"
+      [ "$need_node" = 1 ] && ! have node && missing_hint="$missing_hint node"
+      [ "$need_rust" = 1 ] && ! have cargo && missing_hint="$missing_hint rust"
+      [ "$need_go" = 1 ] && ! have go && missing_hint="$missing_hint go"
+      [ "$need_php" = 1 ] && ! have php && missing_hint="$missing_hint php"
+      [ "$need_ruby" = 1 ] && ! have ruby && missing_hint="$missing_hint ruby"
+      [ "$need_docker" = 1 ] && ! have docker && missing_hint="$missing_hint docker"
+      if [ -n "$missing_hint" ]; then
+        warn "Brak narzędzi:$missing_hint"
+        warn "Zainstaluj automatycznie: $0 --install   (lub ręcznie, instrukcje: README)"
+      fi
+    fi
+  fi
 
   if [ "$REFRESH_THREATS" = 1 ]; then
     refresh_threats
