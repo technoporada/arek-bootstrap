@@ -34,6 +34,29 @@ po stronie, którą kontroluje:
   Dependabot pilnuje aktualizacji.
 - **`.env` nigdy nie jest nadpisywany** i jest ignorowany przez git.
 
+## Ostatnie incydenty (2025–2026)
+
+Krótka ściągawka — pełne analizy w źródłach:
+
+| Kampania | Kiedy | Skala |
+|---|---|---|
+| Shai-Hulud #1 | IX 2025 | 500+ pakietów npm |
+| Team PCP (Trivy, Checkmarx, telnyx, LiteLLM 1.82.7/1.82.8) | III 2026 | 78 330 sekretów, 2 186 organizacji |
+| Miasma (Red Hat → dalej) | VI 2026 | 57 pakietów / 286+ wersji, 647 tys. pobrań/mies. |
+| Mini Shai-Hulud (TanStack, Mistral AI, UiPath, OpenSearch) | V 2026 | setki złośliwych wersji |
+| Shai-Hulud: keyv/cacheable | VIII 2026 | 400+ pakietów / 1700+ wersji |
+| PhantomSub | IX 2026 | 101 pakietów npm |
+| LiteLLM 1.107.0 | X 2026 | 7 wheels + obraz Docker |
+| Razem | VIII 2025–VIII 2026 | **56 potwierdzonych ataków**, ~1 co 3 dni od III 2026 |
+
+Źródła: [StepSecurity](https://www.stepsecurity.io/blog/state-of-open-source-supply-chain-attacks),
+[JFrog](https://research.jfrog.com/post/shai-hulud-is-back-august/),
+[NHS CC-4781](https://digital.nhs.uk/cyber-alerts/2026/cc-4781),
+[Aikido – LiteLLM 1.107.0](https://www.aikido.dev/blog/litellm-compromised-infostealer-rat).
+
+Zaktualizuj lokalną bazę zagrożeń: `./bootstrap.sh --refresh-threats` (wymaga
+`osv-scanner` i/lub `pip-audit`).
+
 ## Czego ten projekt nie gwarantuje
 
 - Nie jest sandboxem. `pip install`, `npm ci` i `composer install` nadal
