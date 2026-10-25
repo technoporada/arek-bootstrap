@@ -1738,7 +1738,7 @@ main() {
 
   if [ -n "$SELECTED" ]; then
     detect_needed_tools
-    if [ "$AUTO_INSTALL" = 1 ]; then
+    if [ "$AUTO_INSTALL" = 1 ] && [ "$CHECK_ONLY" = 0 ]; then
       auto_install_missing
     else
       missing_hint=""
