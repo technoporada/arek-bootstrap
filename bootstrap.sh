@@ -1081,6 +1081,9 @@ detect_needed_tools() {
   need_php=0
   need_ruby=0
   need_docker=0
+  need_cargo=0
+  need_govuln=0
+  need_bundler=0
 
   # bash stack -> shellcheck
   if printf '%s\n' "$SELECTED" | grep -q '|.*bash'; then
@@ -1135,6 +1138,28 @@ auto_install_missing() {
   fi
   if [ "$need_rust" = 1 ] && ! have cargo; then
     if install_rust_user; then installed="$installed rust"; fi
+  fi
+
+  # audyt (user-level, przez natywne menedżery)
+  if [ "$need_python_venv" = 1 ] && ! have pip-audit; then
+    log "instaluję pip-audit (user-level)"
+    if have uv; then
+      uv tool install pip-audit >/dev/null 2>&1 && installed="$installed pip-audit"
+    else
+      python3 -m pip install --user pip-audit >/dev/null 2>&1 && installed="$installed pip-audit"
+    fi
+  fi
+  if [ "$need_cargo" = 1 ] && have cargo && ! have cargo-audit; then
+    log "instaluję cargo-audit (user-level)"
+    cargo install cargo-audit >/dev/null 2>&1 && installed="$installed cargo-audit"
+  fi
+  if [ "$need_govuln" = 1 ] && have go && ! have govulncheck; then
+    log "instaluję govulncheck (user-level)"
+    go install golang.org/x/vuln/cmd/govulncheck@latest >/dev/null 2>&1 && installed="$installed govulncheck"
+  fi
+  if [ "$need_bundler" = 1 ] && have gem && ! have bundler-audit; then
+    log "instaluję bundler-audit (user-level)"
+    gem install bundler-audit >/dev/null 2>&1 && installed="$installed bundler-audit"
   fi
 
   # system-level (sudo) - tylko jeśli --install
