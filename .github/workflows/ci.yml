@@ -28,11 +28,19 @@ jobs:
       - name: Składnia bash
         run: bash -n bootstrap.sh make_project.sh tests/run.sh
 
-      - name: ShellCheck
+      # ShellCheck jest pobierany z przypiętej wersji i weryfikowany SHA256,
+      # żeby CI nie zależało od apt i ruchomego pakietu.
+      - name: ShellCheck (przypięty)
+        env:
+          SC_VERSION: "0.10.0"
+          SC_SHA256: "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87"
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
-          shellcheck bootstrap.sh make_project.sh tests/run.sh
+          set -euo pipefail
+          curl -fsSL -o /tmp/shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SC_VERSION}/shellcheck-v${SC_VERSION}.linux.x86_64.tar.xz"
+          echo "${SC_SHA256}  /tmp/shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+          /tmp/shellcheck-v${SC_VERSION}/shellcheck bootstrap.sh make_project.sh tests/run.sh
 
       - name: Testy
         run: bash tests/run.sh
@@ -40,7 +48,7 @@ jobs:
       - name: Akcje w CI są przypięte do SHA
         run: |
           set -eu
-          if grep -nE '^\s*uses:\s*[^#]+@(v[0-9]|main|master)\b' .github/workflows/*.yml; then
+          if grep -rnE '^[[:space:]]*uses:[[:space:]]*[^#]+@(v[0-9]|main|master)([[:space:]]|$)' .github/workflows/*.yml; then
             echo "Akcja używa ruchomego tagu — przypnij do SHA." >&2
             exit 1
           fi

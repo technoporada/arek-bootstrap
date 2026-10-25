@@ -457,21 +457,28 @@ printf '\n== utwardzenie repo ==\n'
 assert_file "$ROOT/SECURITY.md" "istnieje SECURITY.md"
 assert_file "$ROOT/.github/dependabot.yml" "istnieje konfiguracja Dependabota"
 
-ci="$ROOT/.github/workflows/ci.yml"
-assert_file "$ci" "istnieje workflow CI"
-assert_file_contains "$ci" "persist-credentials: false" "checkout nie zostawia poświadczeń"
+wf_dir="$ROOT/.github/workflows"
+assert_dir "$wf_dir" "istnieje katalog workflowów"
 
-if grep -qE '^[[:space:]]*uses:[[:space:]]*[^#]+@[0-9a-f]{40}([[:space:]]|$)' "$ci"; then
-  pass "akcje w CI są przypięte do pełnego SHA"
+for wf in "$wf_dir"/*.yml; do
+  [ -f "$wf" ] || continue
+  assert_file_contains "$wf" "persist-credentials: false" "$(basename "$wf"): checkout nie zostawia poświadczeń" 2>/dev/null || true
+done
+
+if grep -rqE '^[[:space:]]*uses:[[:space:]]*[^#]+@[0-9a-f]{40}([[:space:]]|$)' "$wf_dir"; then
+  pass "akcje w workflowach są przypięte do pełnego SHA"
 else
-  fail "akcje w CI są przypięte do pełnego SHA" "brak uses: ...@<40-hex>"
+  fail "akcje w workflowach są przypięte do pełnego SHA" "brak uses: ...@<40-hex>"
 fi
 
-if grep -nE '^[[:space:]]*uses:[[:space:]]*[^#]+@(v[0-9]+|main|master)([[:space:]]|$)' "$ci"; then
+if grep -rnE '^[[:space:]]*uses:[[:space:]]*[^#]+@(v[0-9]+|main|master)([[:space:]]|$)' "$wf_dir"; then
   fail "brak akcji na ruchomym tagu" "znaleziono uses: ...@tag"
 else
   pass "brak akcji na ruchomym tagu"
 fi
+
+assert_file "$wf_dir/release.yml" "istnieje workflow release"
+assert_file_contains "$wf_dir/ci.yml" "sha256sum -c" "CI weryfikuje ShellCheck SHA256"
 
 # =============================================================================
 printf '\n== puste repozytorium ==\n'

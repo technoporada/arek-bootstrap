@@ -229,7 +229,9 @@ Testy działają bez sieci: nie wykonują `pip install` ani `npm install`.
 Sprawdzają wykrywanie, monorepo, idempotencję, `--dry-run`, `--root`,
 generator i walidację argumentów.
 
-CI (GitHub Actions) uruchamia składnię, ShellCheck i testy na Ubuntu.
+CI (GitHub Actions) uruchamia składnię, przypięty ShellCheck (z weryfikacją
+SHA256) i testy na Ubuntu. Tag `v*` uruchamia dodatkowo workflow release,
+który publikuje skrypty i plik `SHA256SUMS`.
 
 ## Zasady
 
