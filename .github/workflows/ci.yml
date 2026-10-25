@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # Akcje są przypięte do pełnego SHA, nie do ruchomego tagu.
+      # Aktualizacje robi Dependabot (.github/dependabot.yml).
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Składnia bash
+        run: bash -n bootstrap.sh make_project.sh tests/run.sh
+
+      - name: ShellCheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck bootstrap.sh make_project.sh tests/run.sh
+
+      - name: Testy
+        run: bash tests/run.sh
+
+      - name: Akcje w CI są przypięte do SHA
+        run: |
+          set -eu
+          if grep -nE '^\s*uses:\s*[^#]+@(v[0-9]|main|master)\b' .github/workflows/*.yml; then
+            echo "Akcja używa ruchomego tagu — przypnij do SHA." >&2
+            exit 1
+          fi

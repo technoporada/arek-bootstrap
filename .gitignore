@@ -1,0 +1,16 @@
+# lokalny stan bootstrapu
+.arek-bootstrap/
+
+# sekrety
+.env
+.env.*
+!.env.example
+
+# środowiska
+.venv/
+venv/
+node_modules/
+
+# logi i system
+*.log
+.DS_Store
