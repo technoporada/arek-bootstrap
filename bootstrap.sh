@@ -23,6 +23,7 @@ FORCE=0
 ALL=0
 LIST=0
 DO_AUDIT=1
+REFRESH_THREATS=0
 NO_SCRIPTS=${AREK_NO_SCRIPTS:-0}
 DOCKER_UP=0
 QUIET=0
@@ -119,6 +120,7 @@ Opcje:
   --no-audit             pomiń audyt podatności i weryfikację podpisów
   --no-scripts           nie uruchamiaj skryptów instalacyjnych pakietów
                          (npm/pnpm/yarn/bun --ignore-scripts, composer --no-scripts)
+  --refresh-threats      odśwież lokalną bazę zagrożeń (osv-scanner) i przeskanuj projekt
   --docker-up            po walidacji uruchom docker compose up -d --build
   --quiet, -q            tylko ostrzeżenia i błędy
   --verbose, -v          dodatkowe informacje diagnostyczne
@@ -178,6 +180,9 @@ parse_args() {
         ;;
       --no-scripts)
         NO_SCRIPTS=1
+        ;;
+      --refresh-threats)
+        REFRESH_THREATS=1
         ;;
       --docker-up)
         DOCKER_UP=1
@@ -773,6 +778,158 @@ check_docker_pins() {
 }
 
 # ---------------------------------------------------------------------------
+# Audyt zależności (natywne narzędzia, jeśli są zainstalowane)
+# ---------------------------------------------------------------------------
+audit_stack() {
+  local stack=$1
+  local pm lockfile=0
+
+  [ "$DO_AUDIT" = 1 ] || return 0
+
+  case "$stack" in
+    python)
+      if have pip-audit; then
+        log "pip-audit"
+        run pip-audit || warn "pip-audit zgłasza podatności — przejrzyj: pip-audit --fix"
+      else
+        warn "python: brak pip-audit — zainstaluj: python -m pip install pip-audit"
+      fi
+      if [ -f requirements.txt ] && grep -q -- '--hash=' requirements.txt; then
+        log "requirements.txt ma hashe — integralność zweryfikowana przez pip"
+      fi
+      ;;
+    node)
+      pm=$(node_manager)
+      case "$pm" in
+        npm)
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            lockfile=1
+          fi
+          log "npm audit"
+          run npm audit || warn "npm audit zgłasza podatności — przejrzyj: npm audit fix"
+          if [ "$lockfile" = 1 ]; then
+            log "npm audit signatures (podpisy rejestru)"
+            run npm audit signatures || warn "npm audit signatures: weryfikacja podpisów nie powiodła się (starszy npm?)"
+          fi
+          ;;
+        pnpm)
+          log "pnpm audit"
+          run pnpm audit || warn "pnpm audit zgłasza podatności"
+          ;;
+        yarn)
+          log "yarn audit"
+          run yarn audit || warn "yarn audit zgłasza podatności"
+          ;;
+        bun)
+          warn "bun: brak wbudowanego audytu — użyj osv-scanner"
+          ;;
+      esac
+      if have osv-scanner; then
+        log "osv-scanner (node)"
+        run osv-scanner scan source -r . || warn "osv-scanner zgłasza podatności"
+      else
+        warn "node: zainstaluj osv-scanner dla głębszego skanu (https://google.github.io/osv-scanner/)"
+      fi
+      ;;
+    go)
+      if have govulncheck; then
+        log "govulncheck"
+        run govulncheck ./... || warn "govulncheck zgłasza podatności"
+      else
+        warn "go: zainstaluj govulncheck (go install golang.org/x/vuln/cmd/govulncheck@latest)"
+      fi
+      if have osv-scanner; then
+        log "osv-scanner (go)"
+        run osv-scanner scan source -r . || warn "osv-scanner zgłasza podatności"
+      fi
+      ;;
+    rust)
+      if have cargo-audit; then
+        log "cargo audit"
+        run cargo audit || warn "cargo audit zgłasza podatności"
+      else
+        warn "rust: zainstaluj cargo-audit (cargo install cargo-audit)"
+      fi
+      if have osv-scanner; then
+        log "osv-scanner (rust)"
+        run osv-scanner scan source -r . || warn "osv-scanner zgłasza podatności"
+      fi
+      ;;
+    php)
+      log "composer audit"
+      run composer audit --no-interaction || warn "composer audit zgłasza podatności"
+      if have osv-scanner; then
+        log "osv-scanner (php)"
+        run osv-scanner scan source -r . || warn "osv-scanner zgłasza podatności"
+      fi
+      ;;
+    ruby)
+      if have bundler-audit; then
+        log "bundler-audit"
+        run bundler-audit check --update || warn "bundler-audit zgłasza podatności"
+      else
+        warn "ruby: zainstaluj bundler-audit (gem install bundler-audit)"
+      fi
+      if have osv-scanner; then
+        log "osv-scanner (ruby)"
+        run osv-scanner scan source -r . || warn "osv-scanner zgłasza podatności"
+      fi
+      ;;
+    docker)
+      if have osv-scanner; then
+        log "osv-scanner (docker)"
+        run osv-scanner scan source -r . || warn "osv-scanner zgłasza podatności"
+      fi
+      if have trivy; then
+        log "trivy (obrazy)"
+        # skanuje compose; bez blokowania
+        run trivy config . || warn "trivy zgłasza problemy w konfiguracji"
+      fi
+      ;;
+  esac
+}
+
+refresh_threats() {
+  local ts
+  ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+  section "Odświeżanie bazy zagrożeń"
+
+  if have osv-scanner; then
+    log "osv-scanner dostępny — skanuję projekt (pobierze aktualną bazę OSV)"
+    if run osv-scanner scan source -r .; then
+      ok "osv-scanner zakończony"
+    else
+      warn "osv-scanner zgłosił podatności lub błąd — przejrzyj wynik powyżej"
+    fi
+  else
+    warn "brak osv-scanner — zainstaluj: https://google.github.io/osv-scanner/installation/"
+  fi
+
+  if have pip-audit; then
+    log "pip-audit (python)"
+    run pip-audit || warn "pip-audit zgłasza podatności"
+  fi
+
+  if [ "$DRY_RUN" = 0 ]; then
+    mkdir -p "$STATE_DIR/state"
+    printf '%s\n' "$ts" > "$STATE_DIR/state/threats.stamp"
+    log "znacznik odświeżenia: $STATE_DIR/state/threats.stamp ($ts)"
+  else
+    warn "dry-run: znacznik nie został zapisany"
+  fi
+
+  if ! have osv-scanner || ! have pip-audit || ! have cargo-audit || ! have govulncheck || ! have bundler-audit; then
+    log "Zainstaluj brakujące narzędzia audytu (user-level):"
+    have pip-audit || printf '  pip-audit: python -m pip install --user pip-audit  (albo: uv tool install pip-audit)\n'
+    have osv-scanner || printf '  osv-scanner: https://google.github.io/osv-scanner/installation/\n'
+    have cargo-audit || printf '  cargo-audit: cargo install cargo-audit\n'
+    have govulncheck || printf '  govulncheck: go install golang.org/x/vuln/cmd/govulncheck@latest\n'
+    have bundler-audit || printf '  bundler-audit: gem install bundler-audit\n'
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Python
 # ---------------------------------------------------------------------------
 pick_python() {
@@ -985,14 +1142,6 @@ setup_node() {
         log "npm install (brak lockfile)"
         run npm install ${ni[@]+"${ni[@]}"} || die "npm install nie powiódł się"
       fi
-      if [ "$DO_AUDIT" = 1 ]; then
-        log "npm audit"
-        run npm audit || warn "npm audit zgłasza podatności — przejrzyj: npm audit fix"
-        if [ "$lockfile" = 1 ]; then
-          log "npm audit signatures (podpisy rejestru)"
-          run npm audit signatures || warn "npm audit signatures: nie udało się zweryfikować podpisów (starszy npm?)"
-        fi
-      fi
       ;;
     pnpm)
       if [ -f pnpm-lock.yaml ]; then
@@ -1003,9 +1152,6 @@ setup_node() {
         warn_no_lockfile "node"
         log "pnpm install (brak lockfile)"
         run pnpm install ${ni[@]+"${ni[@]}"} || die "pnpm install nie powiódł się"
-      fi
-      if [ "$DO_AUDIT" = 1 ]; then
-        run pnpm audit || warn "pnpm audit zgłasza podatności"
       fi
       ;;
     yarn)
@@ -1021,9 +1167,6 @@ setup_node() {
             log "yarn install (brak lockfile)"
             run yarn install ${ni[@]+"${ni[@]}"} || die "yarn install nie powiódł się"
           fi
-          if [ "$DO_AUDIT" = 1 ]; then
-            run yarn audit || warn "yarn audit zgłasza podatności"
-          fi
           ;;
         *)
           log "yarn install --immutable (Yarn $major)"
@@ -1031,9 +1174,6 @@ setup_node() {
             run env YARN_ENABLE_SCRIPTS=false yarn install --immutable || die "yarn install nie powiódł się"
           else
             run yarn install --immutable || die "yarn install nie powiódł się"
-          fi
-          if [ "$DO_AUDIT" = 1 ]; then
-            run yarn npm audit || warn "yarn npm audit zgłasza podatności"
           fi
           ;;
       esac
@@ -1086,10 +1226,6 @@ setup_php() {
   fi
 
   run composer install --no-interaction --prefer-dist ${ca[@]+"${ca[@]}"} || die "composer install nie powiódł się"
-
-  if [ "$DO_AUDIT" = 1 ]; then
-    run composer audit --no-interaction || warn "composer audit zgłasza podatności"
-  fi
 }
 
 setup_ruby() {
@@ -1231,6 +1367,14 @@ print_report() {
   show_tool poetry poetry --version
   show_tool pipenv pipenv --version
 
+  section "Audyt (narzędzia)"
+  printf '  %-14s %s\n' "pip-audit:" "$(have pip-audit && echo dostępny || echo brak)"
+  printf '  %-14s %s\n' "cargo-audit:" "$(have cargo-audit && echo dostępny || echo brak)"
+  printf '  %-14s %s\n' "govulncheck:" "$(have govulncheck && echo dostępny || echo brak)"
+  printf '  %-14s %s\n' "bundler-audit:" "$(have bundler-audit && echo dostępny || echo brak)"
+  printf '  %-14s %s\n' "osv-scanner:" "$(have osv-scanner && echo dostępny || echo brak)"
+  printf '  %-14s %s\n' "trivy:" "$(have trivy && echo dostępny || echo brak)"
+
   section "Stan"
   printf '  katalog stanu: %s\n' ".arek-bootstrap"
   printf '  wersja:        %s\n' "$VERSION"
@@ -1310,6 +1454,7 @@ process_selected() {
 
       log "$stack — konfiguruję"
       "setup_$stack"
+      audit_stack "$stack"
       write_stamp "$abs" "$d" "$stack"
       DONE=$((DONE + 1))
     done
@@ -1333,6 +1478,11 @@ main() {
   fi
 
   select_projects
+
+  if [ "$REFRESH_THREATS" = 1 ]; then
+    refresh_threats
+    exit 0
+  fi
 
   if [ "$LIST" = 1 ]; then
     if [ -z "$SELECTED" ]; then

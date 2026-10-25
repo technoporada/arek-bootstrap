@@ -144,6 +144,7 @@ Generator robi to automatycznie.
 --force, -f            ignoruj stemple i wykonaj instalację od nowa
 --no-audit             pomiń audyt podatności i weryfikację podpisów
 --no-scripts           wyłącz lifecycle scripts npm/pnpm/yarn/bun i Composera
+--refresh-threats      odśwież bazę zagrożeń (osv-scanner) i przeskanuj projekt
 --docker-up            po walidacji uruchom docker compose up -d --build
 --quiet, -q            tylko ostrzeżenia i błędy
 --verbose, -v          dodatkowa diagnostyka
@@ -216,6 +217,30 @@ wykorzystują ataki na pakiety (Shai-Hulud, Miasma, Team PCP i podobne):
 - akcje w CI są przypięte do pełnego SHA, a Dependabot pilnuje aktualizacji.
 
 Szczegóły i procedura reagowania na kompromitację: [SECURITY.md](SECURITY.md).
+
+## Narzędzia audytu (opcjonalne, ale zalecane)
+
+`arek-bootstrap` wykrywa i uruchamia je, jeśli są zainstalowane; przy braku
+daje ostrzeżenie i instrukcję instalacji:
+
+```bash
+# uniwersalny skaner (wszystkie ekosystemy)
+# https://google.github.io/osv-scanner/installation/
+# Python
+python -m pip install --user pip-audit
+# Rust
+cargo install cargo-audit
+# Go
+go install golang.org/x/vuln/cmd/govulncheck@latest
+# Ruby
+gem install bundler-audit
+```
+
+Odświeżenie lokalnej bazy zagrożeń i skan projektu:
+
+```bash
+./bootstrap.sh --refresh-threats
+```
 
 ## Rozwój
 
