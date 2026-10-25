@@ -891,24 +891,83 @@ audit_stack() {
 
 refresh_threats() {
   local ts
+  local need_osv=0 need_pip=0 need_cargo=0 need_govuln=0 need_bundler=0
+  local any=0
+
+  # wykryj, które narzędzia są w ogóle potrzebne w tym projekcie
+  if [ -f requirements.txt ] || [ -f pyproject.toml ] || [ -f setup.py ] || [ -f Pipfile ]; then
+    need_pip=1; any=1
+  fi
+  if [ -f package.json ]; then
+    any=1
+  fi
+  if [ -f go.mod ]; then
+    need_govuln=1; any=1
+  fi
+  if [ -f Cargo.toml ]; then
+    need_cargo=1; any=1
+  fi
+  if [ -f composer.json ]; then
+    any=1
+  fi
+  if [ -f Gemfile ]; then
+    need_bundler=1; any=1
+  fi
+  if ls compose.yaml compose.yml docker-compose.yaml docker-compose.yml >/dev/null 2>&1; then
+    any=1
+  fi
+  # bash: projekt bez zależności zewnętrznych - osv-scanner nie dotyczy
+  if find . -maxdepth 1 -type f -name '*.sh' -print -quit 2>/dev/null | grep -q .; then
+    any=1
+  fi
+  # osv-scanner jest uniwersalny - sugeruj, jeśli są zależności zewnętrzne
+  if [ "$any" = 1 ] && { [ -f requirements.txt ] || [ -f pyproject.toml ] || [ -f setup.py ] || [ -f Pipfile ] || [ -f package.json ] || [ -f go.mod ] || [ -f Cargo.toml ] || [ -f composer.json ] || [ -f Gemfile ] || ls compose.yaml compose.yml docker-compose.yaml docker-compose.yml >/dev/null 2>&1; }; then
+    need_osv=1
+  fi
+
   ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
   section "Odświeżanie bazy zagrożeń"
 
-  if have osv-scanner; then
-    log "osv-scanner dostępny — skanuję projekt (pobierze aktualną bazę OSV)"
-    if run osv-scanner scan source -r .; then
-      ok "osv-scanner zakończony"
-    else
-      warn "osv-scanner zgłosił podatności lub błąd — przejrzyj wynik powyżej"
-    fi
-  else
-    warn "brak osv-scanner — zainstaluj: https://google.github.io/osv-scanner/installation/"
+  if [ "$any" = 0 ]; then
+    warn "brak manifestów w tym katalogu - nic do skanowania"
+  elif [ "$need_osv" = 0 ] && [ "$need_pip" = 0 ] && [ "$need_cargo" = 0 ] && [ "$need_govuln" = 0 ] && [ "$need_bundler" = 0 ]; then
+    log "projekt bez zależności zewnętrznych - audyt nie dotyczy"
   fi
 
-  if have pip-audit; then
-    log "pip-audit (python)"
-    run pip-audit || warn "pip-audit zgłasza podatności"
+  if [ "$need_osv" = 1 ]; then
+    if have osv-scanner; then
+      log "osv-scanner - skanuję projekt (pobierze aktualną bazę OSV)"
+      if run osv-scanner scan source -r .; then
+        ok "osv-scanner zakończony"
+      else
+        warn "osv-scanner zgłosił podatności lub błąd - przejrzyj wynik powyżej"
+      fi
+    else
+      warn "brak osv-scanner - https://google.github.io/osv-scanner/installation/"
+    fi
+  fi
+
+  if [ "$need_pip" = 1 ]; then
+    if have pip-audit; then
+      log "pip-audit (python)"
+      run pip-audit || warn "pip-audit zgłasza podatności"
+    else
+      warn "brak pip-audit - python -m pip install --user pip-audit"
+    fi
+  fi
+
+  if [ "$need_cargo" = 1 ] && have cargo-audit; then
+    log "cargo audit"
+    run cargo audit || warn "cargo audit zgłasza podatności"
+  fi
+  if [ "$need_govuln" = 1 ] && have govulncheck; then
+    log "govulncheck"
+    run govulncheck ./... || warn "govulncheck zgłasza podatności"
+  fi
+  if [ "$need_bundler" = 1 ] && have bundler-audit; then
+    log "bundler-audit"
+    run bundler-audit check --update || warn "bundler-audit zgłasza podatności"
   fi
 
   if [ "$DRY_RUN" = 0 ]; then
@@ -919,13 +978,21 @@ refresh_threats() {
     warn "dry-run: znacznik nie został zapisany"
   fi
 
-  if ! have osv-scanner || ! have pip-audit || ! have cargo-audit || ! have govulncheck || ! have bundler-audit; then
-    log "Zainstaluj brakujące narzędzia audytu (user-level):"
-    have pip-audit || printf '  pip-audit: python -m pip install --user pip-audit  (albo: uv tool install pip-audit)\n'
-    have osv-scanner || printf '  osv-scanner: https://google.github.io/osv-scanner/installation/\n'
-    have cargo-audit || printf '  cargo-audit: cargo install cargo-audit\n'
-    have govulncheck || printf '  govulncheck: go install golang.org/x/vuln/cmd/govulncheck@latest\n'
-    have bundler-audit || printf '  bundler-audit: gem install bundler-audit\n'
+  # krótkie, tylko dla brakujących i relevantnych
+  local missing=0
+  [ "$need_osv" = 1 ] && ! have osv-scanner && missing=1
+  [ "$need_pip" = 1 ] && ! have pip-audit && missing=1
+  [ "$need_cargo" = 1 ] && ! have cargo-audit && missing=1
+  [ "$need_govuln" = 1 ] && ! have govulncheck && missing=1
+  [ "$need_bundler" = 1 ] && ! have bundler-audit && missing=1
+
+  if [ "$missing" = 1 ]; then
+    warn "Brakujące narzędzia audytu (zainstaluj tylko te, których potrzebujesz):"
+    [ "$need_osv" = 1 ] && ! have osv-scanner && printf '  osv-scanner: https://google.github.io/osv-scanner/installation/\n'
+    [ "$need_pip" = 1 ] && ! have pip-audit && printf '  pip-audit: python -m pip install --user pip-audit\n'
+    [ "$need_cargo" = 1 ] && ! have cargo-audit && printf '  cargo-audit: cargo install cargo-audit\n'
+    [ "$need_govuln" = 1 ] && ! have govulncheck && printf '  govulncheck: go install golang.org/x/vuln/cmd/govulncheck@latest\n'
+    [ "$need_bundler" = 1 ] && ! have bundler-audit && printf '  bundler-audit: gem install bundler-audit\n'
   fi
 }
 
