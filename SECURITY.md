@@ -64,6 +64,7 @@ po stronie, którą kontroluje:
 ./bootstrap.sh --check-only     # lockfile'e, stemple, przypięcie obrazów
 ./bootstrap.sh --no-scripts     # instalacja bez lifecycle scripts
 npm audit signatures            # podpisy paczek npm
+sha256sum -c SHA256SUMS        # weryfikacja pobranych skryptów z release
 git status --short              # nic nie powinno pojawić się przypadkiem
 ```
 

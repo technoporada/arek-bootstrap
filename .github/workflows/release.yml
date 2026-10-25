@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Składnia bash
+        run: bash -n bootstrap.sh make_project.sh tests/run.sh
+
+      - name: ShellCheck (przypięty)
+        env:
+          SC_VERSION: "0.10.0"
+          SC_SHA256: "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SC_VERSION}/shellcheck-v${SC_VERSION}.linux.x86_64.tar.xz"
+          echo "${SC_SHA256}  /tmp/shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+          /tmp/shellcheck-v${SC_VERSION}/shellcheck bootstrap.sh make_project.sh tests/run.sh
+
+      - name: Testy
+        run: bash tests/run.sh
+
+      - name: SHA256SUMS
+        run: |
+          set -euo pipefail
+          sha256sum bootstrap.sh make_project.sh tests/run.sh > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publikacja release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "arek-bootstrap ${GITHUB_REF_NAME}. Weryfikacja: \`sha256sum -c SHA256SUMS\`." \
+            bootstrap.sh make_project.sh tests/run.sh SHA256SUMS
