@@ -213,6 +213,8 @@ wykorzystują ataki na pakiety (Shai-Hulud, Miasma, Team PCP i podobne):
   warto go użyć przy pierwszej instalacji nieznanej zależności;
 - `--check-only` ostrzega o obrazach Dockera bez `@sha256:` (tag można
   podmienić) i o brakach lockfile'ów;
+- obrazy w szablonach `make_project.sh` są przypięte do digestu (`@sha256:…`),
+  więc `docker build` jest powtarzalny.
 - skrypt nigdy nie robi `curl | bash` ani nie nadpisuje `.env`;
 - akcje w CI są przypięte do pełnego SHA, a Dependabot pilnuje aktualizacji.
 
