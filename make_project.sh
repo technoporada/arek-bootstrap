@@ -491,7 +491,7 @@ write_docker() {
   case "$TYPE" in
     python)
       cat > Dockerfile <<'EOF'
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
 
 WORKDIR /app
 
@@ -512,7 +512,7 @@ EOF
       ;;
     node)
       cat > Dockerfile <<'EOF'
-FROM node:22-alpine
+FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
 
 WORKDIR /app
 
@@ -532,7 +532,7 @@ EOF
       ;;
     go)
       cat > Dockerfile <<'EOF'
-FROM golang:1.23-alpine AS build
+FROM golang:1.23-alpine@sha256:383395b794dffa5b53012a212365d40c8e37109a626ca30d6151c8348d380b5f AS build
 
 WORKDIR /src
 COPY go.mod ./
@@ -540,7 +540,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/app .
 
-FROM alpine:3.20
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 RUN adduser -D app
 USER app
 COPY --from=build /out/app /app
@@ -555,14 +555,14 @@ EOF
     rust)
       local rust_slug=${SLUG//./-}
       cat > Dockerfile <<EOF
-FROM rust:1.82-slim AS build
+FROM rust:1.82-slim@sha256:1111c28d995d06a7863ba6cea3b3dcb87bebe65af8ec5517caaf2c8c26f38010 AS build
 
 WORKDIR /src
 COPY Cargo.toml ./
 COPY src ./src
 RUN cargo build --release
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
 COPY --from=build /src/target/release/$rust_slug /app
 CMD ["/app"]
 EOF
@@ -575,13 +575,13 @@ EOF
       ;;
     php)
       cat > Dockerfile <<'EOF'
-FROM composer:2 AS vendor
+FROM composer:2@sha256:b6dcd72ca98fa19d0e5b8476de179859704891fad06dd9e0b96833d4c430a5fc AS vendor
 
 WORKDIR /app
 COPY composer.json ./
 RUN composer install --no-dev --no-interaction --prefer-dist --no-scripts
 
-FROM php:8.3-cli
+FROM php:8.3-cli@sha256:98d555ff97b3865140ad31032508c3ca089fa97a8944b14ca9dc03ea05d788cd
 
 WORKDIR /app
 COPY --from=vendor /app/vendor ./vendor
@@ -597,7 +597,7 @@ EOF
       ;;
     ruby)
       cat > Dockerfile <<'EOF'
-FROM ruby:3.3-slim
+FROM ruby:3.3-slim@sha256:31f3f9b427927fddb6ef07f27127679cabd21098d0f6b2fec54ddee720276cc7
 
 WORKDIR /app
 COPY Gemfile ./
