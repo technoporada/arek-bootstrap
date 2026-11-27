@@ -481,6 +481,48 @@ assert_file "$wf_dir/release.yml" "istnieje workflow release"
 assert_file_contains "$wf_dir/ci.yml" "sha256sum -c" "CI weryfikuje ShellCheck SHA256"
 
 # =============================================================================
+printf '\n== doctor ==\n'
+doc="$TMP/doctor"
+mkdir -p "$doc"
+cat > "$doc/app.py" <<'PY'
+print("hello")
+PY
+run_cmd "$doc" python3 "$ROOT/doctor.py" "$doc"
+assert_rc_zero "doctor na czystym małym projekcie kończy się kodem 0"
+
+cat > "$doc/.env" <<'EOF'
+SECRET_TOKEN=supersecretvalue123
+EOF
+run_cmd "$doc" python3 "$ROOT/doctor.py" "$doc"
+assert_rc_nonzero "doctor wykrywa .env jako problem"
+assert_contains "$OUT" "[FAIL]" "doctor zgłasza FAIL dla .env/sekretu"
+assert_not_contains "$OUT" "supersecretvalue123" "doctor nie wypisuje surowego sekretu"
+
+run_cmd "$doc" python3 "$ROOT/doctor.py" "$doc" --json
+assert_rc_nonzero "doctor --json zwraca kod dla FAIL"
+assert_contains "$OUT" '"summary"' "doctor --json zwraca summary"
+
+run_cmd "$doc" "$BOOTSTRAP" --doctor
+assert_rc_nonzero "bootstrap --doctor propaguje kod wyjścia doctor"
+
+# =============================================================================
+printf '\n== wykrywanie Python bez manifestu ==\n'
+nom="$TMP/nom"
+mkdir -p "$nom"
+cat > "$nom/app.py" <<'PY'
+import json
+from flask import Flask
+import requests
+PY
+run_cmd "$nom" "$BOOTSTRAP" --check-only
+assert_rc_zero "check-only wykrywa Python bez manifestu"
+assert_contains "$OUT" "python" "projekt .py bez requirements jest wykrywany jako python"
+
+run_cmd "$nom" "$BOOTSTRAP" --dry-run
+assert_rc_zero "dry-run dla Python bez manifestu kończy się kodem 0"
+assert_contains "$OUT" "wykryć zależności z importów" "dry-run informuje o inferencji zależności"
+
+# =============================================================================
 printf '\n== puste repozytorium ==\n'
 empty="$TMP/empty"
 mkdir -p "$empty"
