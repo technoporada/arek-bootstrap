@@ -18,6 +18,7 @@ STATE_DIR=""
 SCAN_DEPTH=3
 
 CHECK_ONLY=0
+DOCTOR=0
 DRY_RUN=0
 FORCE=0
 ALL=0
@@ -111,6 +112,7 @@ Użycie:
 
 Opcje:
   --check, --check-only  tylko raport: wykryte projekty, narzędzia, stan stempli
+  --doctor               audyt higieny/bezpieczeństwa repo (doctor.py)
   --list                 wypisz wykryte projekty i wyjdź
   --lang <stack>         wymuś stack dla katalogu głównego
   --root <katalog>       katalog projektu (domyślnie: bieżący katalog)
@@ -144,8 +146,9 @@ Stemple:
   Zmiana requirements.txt, package.json, lockfile itp. wymusza reinstalację.
 
 Bezpieczeństwo:
-  Skrypt nie pobiera i nie uruchamia kodu przez "curl | bash", nie nadpisuje
-  .env i preferuje instalacje odtwarzalne z lockfile (--frozen/--locked/ci).
+  Domyślnie nie nadpisuje .env i preferuje instalacje odtwarzalne z lockfile
+  (--frozen/--locked/ci). Tryb --install może instalować brakujące narzędzia;
+  instalatory user-level (uv/nvm/rustup) są uruchamiane tylko na jawne żądanie.
 EOF
 }
 
@@ -165,6 +168,9 @@ parse_args() {
         ;;
       --check|--check-only)
         CHECK_ONLY=1
+        ;;
+      --doctor)
+        DOCTOR=1
         ;;
       --dry-run|-n)
         DRY_RUN=1
@@ -416,6 +422,35 @@ scan_projects() {
         -name .tox -o -name __pycache__ -o -name .arek-bootstrap \
       \) -prune \) -o \
       -type f -name '*.sh' -print0
+  )
+
+  # Fallback: wykryj stack po plikach kodu, gdy brak manifestu zależności.
+  # Pomaga w repozytoriach "na szybko", gdzie jest app.py/main.py, ale nie ma
+  # requirements.txt/pyproject.toml.
+  while IFS= read -r -d '' f; do
+    rel=${f#./}
+    case "$rel" in
+      */*) dir=${rel%/*} ;;
+      *) dir="" ;;
+    esac
+    has_code_stack "$dir" && continue
+    case "$rel" in
+      *.py) add_stack "$dir" python ;;
+      *.js|*.mjs|*.cjs|*.ts|*.tsx) add_stack "$dir" node ;;
+      *.go) add_stack "$dir" go ;;
+      *.rs) add_stack "$dir" rust ;;
+      *.php) add_stack "$dir" php ;;
+      *.rb) add_stack "$dir" ruby ;;
+    esac
+  done < <(
+    find . -maxdepth "$SCAN_DEPTH" \
+      \( -type d \( \
+        -name .git -o -name node_modules -o -name .venv -o -name venv -o \
+        -name vendor -o -name target -o -name dist -o -name build -o \
+        -name .tox -o -name __pycache__ -o -name .arek-bootstrap -o \
+        -name .idea -o -name .vscode -o -name .codex -o -name .opencode -o -name .idx \
+      \) -prune \) -o \
+      -type f \( -name '*.py' -o -name '*.js' -o -name '*.mjs' -o -name '*.cjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.go' -o -name '*.rs' -o -name '*.php' -o -name '*.rb' \) -print0
   )
 }
 
@@ -1267,6 +1302,80 @@ check_python_version() {
   esac
 }
 
+infer_python_requirements() {
+  local dir=$1
+  local out_file=$2
+  local py=${3:-python3}
+
+  "$py" - <<'PY' "$dir" "$out_file"
+import ast, os, sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+out = Path(sys.argv[2])
+stdlib = {name.lower() for name in getattr(sys, "stdlib_module_names", set())}
+stdlib.update({"__future__", "typing_extensions"})
+local_names = set()
+for p in root.rglob("*"):
+    if any(part in {".git", ".venv", "venv", "node_modules", "__pycache__", ".arek-bootstrap", "dist", "build"} for part in p.parts):
+        continue
+    if p.suffix == ".py":
+        local_names.add(p.stem.lower())
+    if p.is_dir() and (p / "__init__.py").exists():
+        try:
+            rel = p.relative_to(root)
+        except Exception:
+            continue
+        if rel.parts:
+            local_names.add(rel.parts[0].lower())
+
+mapping = {
+    "bs4": "beautifulsoup4",
+    "cv2": "opencv-python",
+    "pil": "Pillow",
+    "yaml": "PyYAML",
+    "dotenv": "python-dotenv",
+    "dateutil": "python-dateutil",
+    "sklearn": "scikit-learn",
+    "jwt": "PyJWT",
+    "serial": "pyserial",
+    "usb": "pyusb",
+    "gi": "PyGObject",
+    "wx": "wxPython",
+}
+
+imports = set()
+for p in root.rglob("*.py"):
+    if any(part in {".git", ".venv", "venv", "node_modules", "__pycache__", ".arek-bootstrap", "dist", "build"} for part in p.parts):
+        continue
+    try:
+        src = p.read_text(encoding="utf-8", errors="ignore")
+        tree = ast.parse(src)
+    except Exception:
+        continue
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for n in node.names:
+                imports.add(n.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.level and node.level > 0:
+                continue
+            if node.module:
+                imports.add(node.module.split(".")[0])
+
+pkgs = []
+for name in sorted(imports, key=str.lower):
+    low = name.lower()
+    if not low or low in stdlib or low in local_names:
+        continue
+    pkgs.append(mapping.get(low, name))
+
+out.parent.mkdir(parents=True, exist_ok=True)
+out.write_text("\n".join(pkgs) + ("\n" if pkgs else ""), encoding="utf-8")
+print(len(pkgs))
+PY
+}
+
 setup_python() {
   local py pm py_ver installed=0 vpy
   local -a pip_args=()
@@ -1342,7 +1451,22 @@ setup_python() {
       fi
 
       if [ "$installed" = 0 ]; then
-        warn "brak requirements.txt / pyproject.toml — utworzyłem samo .venv"
+        local inferred="$PWD/requirements.inferred.txt"
+        warn "brak requirements.txt / pyproject.toml — próbuję wykryć zależności z importów"
+        if [ "$DRY_RUN" = 1 ]; then
+          log "[dry-run] wygenerowałbym $inferred i zainstalował zależności"
+        else
+          local inferred_count
+          inferred_count=$(infer_python_requirements "$PWD" "$inferred" "$vpy" 2>/dev/null || printf '0')
+          if [ -s "$inferred" ]; then
+            log "wykryte zależności ($inferred_count): $(tr '\n' ' ' < "$inferred")"
+            log "instaluję zależności z requirements.inferred.txt"
+            run "$vpy" -m pip install -r "$inferred" || warn "część zależności z requirements.inferred.txt nie zainstalowała się — sprawdź plik"
+            installed=1
+          else
+            warn "nie wykryłem zewnętrznych zależności z importów — utworzyłem samo .venv"
+          fi
+        fi
       fi
 
       if [ "$DRY_RUN" = 0 ]; then
@@ -1785,6 +1909,20 @@ main() {
   if [ "$REFRESH_THREATS" = 1 ]; then
     refresh_threats
     exit 0
+  fi
+
+  if [ "$DOCTOR" = 1 ]; then
+    local doctor_py="$ROOT/doctor.py"
+    if [ ! -f "$doctor_py" ]; then
+      doctor_py="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/doctor.py"
+    fi
+    if [ ! -f "$doctor_py" ]; then
+      die "brak doctor.py obok bootstrap.sh"
+    fi
+    have python3 || die "doctor wymaga python3 w PATH"
+    log "doctor — audyt higieny/bezpieczeństwa"
+    python3 "$doctor_py" "$ROOT"
+    exit $?
   fi
 
   if [ "$LIST" = 1 ]; then
